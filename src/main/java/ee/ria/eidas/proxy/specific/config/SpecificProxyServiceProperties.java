@@ -46,6 +46,7 @@ public class SpecificProxyServiceProperties {
         assertScopeMappingsIfPresent();
         assertOidcClaimMappingsConfigurationPresent();
         assertOidcClaimMappingPostProcessingRules();
+        assertOIDCClientAuthMethod();
 
         log.info("Configuration: {}", toString());
     }
@@ -109,6 +110,8 @@ public class SpecificProxyServiceProperties {
         private String issuerUrl;
 
         private String defaultUiLanguage = "et";
+
+        private String authMethod = "client_secret_basic";
 
         private Integer maxClockSkewInSeconds = 30;
 
@@ -216,5 +219,19 @@ public class SpecificProxyServiceProperties {
         Assert.notNull(consentBinaryLightToken.issuer, "eidas.proxy.consent-binary-light-token.issuer cannot be null when eidas.proxy.ask-consent is 'true'");
         Assert.notNull(consentBinaryLightToken.algorithm, "eidas.proxy.consent-binary-light-token.algorithm cannot be null when eidas.proxy.ask-consent is 'true'");
         Assert.notNull(consentBinaryLightToken.secret, "eidas.proxy.consent-binary-light-token.secret cannot be null when eidas.proxy.ask-consent is 'true'");
+    }
+
+
+
+    private void assertOIDCClientAuthMethod() {
+        String authMethod = oidc.getAuthMethod();
+        if (authMethod != null) {
+            if (!authMethod.equals("client_secret_basic") && !authMethod.equals("client_secret_post") ) {
+                
+                log.warn("invalid eidas.proxy.oidc.auth-method '{}'. Using default 'client_secret_basic'", authMethod);
+            }
+        } else {
+            log.warn("eidas.proxy.oidc.auth-method not set. Using default  'client_secret_basic'");
+        }
     }
 }

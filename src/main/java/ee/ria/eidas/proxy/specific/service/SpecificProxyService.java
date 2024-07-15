@@ -24,6 +24,7 @@ import com.nimbusds.jwt.JWT;
 import com.nimbusds.oauth2.sdk.*;
 import com.nimbusds.oauth2.sdk.auth.ClientAuthentication;
 import com.nimbusds.oauth2.sdk.auth.ClientSecretBasic;
+import com.nimbusds.oauth2.sdk.auth.ClientSecretPost;
 import com.nimbusds.oauth2.sdk.auth.Secret;
 import com.nimbusds.oauth2.sdk.http.HTTPRequest;
 import com.nimbusds.oauth2.sdk.id.ClientID;
@@ -31,6 +32,8 @@ import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponseParser;
 import com.nimbusds.openid.connect.sdk.claims.ClaimsSet;
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata;
+
+
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties;
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties.IdTokenClaimMappingProperties;
 import ee.ria.eidas.proxy.specific.storage.SpecificProxyServiceCommunication;
@@ -141,10 +144,29 @@ public class SpecificProxyService {
     }
 
     private JWT getIdToken(String oAuthCode, ClientID clientID) throws URISyntaxException {
-        ClientAuthentication clientAuth = new ClientSecretBasic(
-                clientID,
-                new Secret(specificProxyServiceProperties.getOidc().getClientSecret())
-        );
+
+        ClientAuthentication clientAuth ;
+        switch (specificProxyServiceProperties.getOidc().getAuthMethod()) {
+            case "client_secret_basic": 
+                clientAuth = new ClientSecretBasic(
+                    clientID,
+                    new Secret(specificProxyServiceProperties.getOidc().getClientSecret())
+                );
+            break; 
+            case "client_secret_post":
+                clientAuth = new ClientSecretPost(
+                    clientID,
+                    new Secret(specificProxyServiceProperties.getOidc().getClientSecret())
+                );
+            break;
+            default: 
+                clientAuth = new ClientSecretBasic(
+                    clientID,
+                    new Secret(specificProxyServiceProperties.getOidc().getClientSecret())
+                );
+        }
+
+        
 
         OIDCProviderMetadata oidcProviderMetadata = oidcProviderMetadataService.getOidcProviderMetadata();
         TokenRequest request = new TokenRequest(oidcProviderMetadata.getTokenEndpointURI(), clientAuth, getAuthorizationGrant(oAuthCode), null, null, null);
