@@ -113,6 +113,8 @@ public class SpecificProxyServiceProperties {
 
         private String authMethod = "client_secret_basic";
 
+        private SpecificProxyServiceProperties.CookieProperties stateCookie = new SpecificProxyServiceProperties.CookieProperties();
+
         private Integer maxClockSkewInSeconds = 30;
 
         private Integer readTimeoutInMilliseconds = 5000;
@@ -156,6 +158,19 @@ public class SpecificProxyServiceProperties {
         private Map<String, String> attributes = new HashMap<>();
 
         private Map<String, String> attributesPostProcessing = new HashMap<>();
+    }
+
+    @Data
+    @ToString
+    public static class CookieProperties {
+
+        // private String stateCookieName = "eidas_service_proxy_oidc_csrf" ;
+        private Boolean httpOnly = true;
+        private Boolean secure = false;
+        private String path;
+        private String domain;
+        private String sameSite = "none";
+        private int maxAge = 0;
     }
 
     @Data

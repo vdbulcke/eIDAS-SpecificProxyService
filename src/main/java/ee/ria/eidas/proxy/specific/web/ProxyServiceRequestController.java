@@ -1,6 +1,7 @@
 package ee.ria.eidas.proxy.specific.web;
 
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties;
+import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties.CookieProperties;
 import ee.ria.eidas.proxy.specific.error.BadRequestException;
 import ee.ria.eidas.proxy.specific.error.RequestDeniedException;
 import ee.ria.eidas.proxy.specific.service.SpecificProxyService;
@@ -11,15 +12,20 @@ import eu.eidas.auth.commons.attribute.AttributeDefinition;
 import eu.eidas.auth.commons.light.ILightRequest;
 import eu.eidas.auth.commons.protocol.impl.SamlNameIdFormat;
 import eu.eidas.specificcommunication.exception.SpecificCommunicationException;
+
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseCookie;
+import org.springframework.http.ResponseCookie.ResponseCookieBuilder;
 import org.springframework.stereotype.Controller;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.servlet.ModelAndView;
+import org.springframework.http.HttpHeaders;
 
+import javax.servlet.http.HttpServletResponse;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Pattern;
 import javax.validation.constraints.Size;
@@ -31,6 +37,7 @@ import static ee.ria.eidas.proxy.specific.error.SpecificProxyServiceExceptionHan
 import static ee.ria.eidas.proxy.specific.web.filter.HttpRequestHelper.getStringParameterValue;
 import static java.util.Arrays.asList;
 import static java.util.stream.Collectors.toList;
+
 
 @Slf4j
 @Validated
@@ -53,16 +60,16 @@ public class ProxyServiceRequestController {
     private SpecificProxyServiceCommunication specificProxyServiceCommunication;
 
     @GetMapping(value = ENDPOINT_PROXY_SERVICE_REQUEST)
-    public ModelAndView get(@Validated RequestParameters request) throws SpecificCommunicationException {
-        return execute(request);
+    public ModelAndView get(@Validated RequestParameters request, HttpServletResponse response) throws SpecificCommunicationException {
+        return execute(request, response);
     }
 
     @PostMapping(value = ENDPOINT_PROXY_SERVICE_REQUEST)
-    public ModelAndView post(@Validated RequestParameters request) throws SpecificCommunicationException {
-        return execute(request);
+    public ModelAndView post(@Validated RequestParameters request, HttpServletResponse response) throws SpecificCommunicationException {
+        return execute(request, response);
     }
 
-    private ModelAndView execute(RequestParameters request) throws SpecificCommunicationException {
+    private ModelAndView execute(RequestParameters request, HttpServletResponse response) throws SpecificCommunicationException {
         String tokenBase64 = getStringParameterValue(request.getToken());
 
         ILightRequest incomingLightRequest = eidasNodeCommunication.getAndRemoveRequest(tokenBase64);
@@ -70,6 +77,10 @@ public class ProxyServiceRequestController {
 
         CorrelatedRequestsHolder correlatedRequestsHolder = specificProxyService.createOidcAuthenticationRequest(incomingLightRequest);
         specificProxyServiceCommunication.putIdpRequest(correlatedRequestsHolder.getIdpAuthenticationRequestState(), correlatedRequestsHolder);
+
+
+        String state = correlatedRequestsHolder.getIdpAuthenticationRequestState();
+        addStateCSRFCookie(response, state);
 
         return new ModelAndView("redirect:" + correlatedRequestsHolder.getIdpAuthenticationRequest());
     }
@@ -97,6 +108,56 @@ public class ProxyServiceRequestController {
                 .stream().map(AttributeDefinition::getFriendlyName).collect(toList());
         return !Collections.disjoint(asList("LegalName", "LegalPersonIdentifier"), requestAttributesByFriendlyName) &&
                 !Collections.disjoint(asList("GivenName", "FamilyName", "PersonIdentifier", "DateOfBirth"), requestAttributesByFriendlyName);
+    }
+
+
+    private void addStateCSRFCookie(HttpServletResponse response, String state) {
+
+        CookieProperties props = specificProxyServiceProperties.getOidc().getStateCookie();
+        if(props == null) {
+            return;
+        }
+
+        String cookieName = "eidas_service_proxy_oidc_csrf";
+        // String cookieName = props.getStateCookieName();
+        // if (cookieName == null) {
+        //     return;
+        // }
+        
+        ResponseCookieBuilder csrfBuilder = ResponseCookie.from(cookieName, state);
+
+    
+        if(props.getHttpOnly()) {
+            csrfBuilder.httpOnly(true);
+        }
+
+        if(props.getSecure()) {
+            csrfBuilder.secure(true);
+        }
+
+        String domain = props.getDomain();
+        if(domain != null) {
+            csrfBuilder.domain(domain);
+        }
+
+        String path = props.getPath();
+        if(path != null) {
+            csrfBuilder.path(path);
+        }
+
+        String sameSite = props.getSameSite();
+        if(sameSite != null) {
+            csrfBuilder.sameSite(sameSite);
+        }
+
+        int maxAge = props.getMaxAge();
+        if(maxAge != 0) {
+            csrfBuilder.maxAge(maxAge);
+        }
+            
+        ResponseCookie csrf = csrfBuilder.build();
+        response.addHeader(HttpHeaders.SET_COOKIE, csrf.toString() );
+        
     }
 
     @Data

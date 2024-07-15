@@ -2,6 +2,8 @@ package ee.ria.eidas.proxy.specific.web;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+
+import brave.http.HttpServerRequest;
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties;
 import ee.ria.eidas.proxy.specific.error.BadRequestException;
 import ee.ria.eidas.proxy.specific.error.RequestDeniedException;
@@ -25,10 +27,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.Size;
 import java.net.MalformedURLException;
@@ -66,13 +70,14 @@ public class IdpResponseController {
 	@GetMapping(value = ENDPOINT_IDP_RESPONSE)
 	public ModelAndView processIdpResponse (
 				@Validated IdpCallbackRequest idpCallbackRequest,
+				@CookieValue("eidas_service_proxy_oidc_csrf") String csrfStateCookie,
 				Model model) throws SpecificCommunicationException, MalformedURLException {
 
 		String state = getStringParameterValue(idpCallbackRequest.getState());
 		String errorCode = getStringParameterValue(idpCallbackRequest.getError());
 		String errorDescription = getStringParameterValue(idpCallbackRequest.getErrorDescription());
 		String oAuthCode = getStringParameterValue(idpCallbackRequest.getCode());
-
+		
 		if (errorCode == null && oAuthCode == null) {
 			throw new BadRequestException("Either error or code parameter is required");
 		}
@@ -94,6 +99,15 @@ public class IdpResponseController {
 			}
 		}
 
+		// https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest
+		// state
+    //   RECOMMENDED. Opaque value used to maintain state between the request and the callback. 
+    //                Typically, Cross-Site Request Forgery (CSRF, XSRF) mitigation is done by 
+    //                cryptographically binding the value of this parameter with a browser cookie.
+		if (state != null  && !state.equals(csrfStateCookie)) {
+			throw new IllegalStateException(String.format("state parameter does not match csrf cookie (state = '%s', csrfCookie = '%s')", state, csrfStateCookie));
+		}
+		
 		log.info("Handling successful authentication callback from Idp: {}", idpCallbackRequest);
 		ILightResponse lightResponse = specificProxyService.queryIdpForRequestedAttributes(
 				oAuthCode,
