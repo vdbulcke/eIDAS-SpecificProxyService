@@ -46,6 +46,7 @@ public class SpecificProxyServiceProperties {
         assertScopeMappingsIfPresent();
         assertOidcClaimMappingsConfigurationPresent();
         assertOidcClaimMappingPostProcessingRules();
+        assertParConfig();
         assertOIDCClientAuthMethod();
 
         log.info("Configuration: {}", toString());
@@ -112,6 +113,10 @@ public class SpecificProxyServiceProperties {
         private String defaultUiLanguage = "et";
 
         private String authMethod = "client_secret_basic";
+
+        private Boolean pkce = false;
+        private Boolean par = false;
+        private String parEndpoint;
 
         private SpecificProxyServiceProperties.CookieProperties stateCookie = new SpecificProxyServiceProperties.CookieProperties();
 
@@ -247,6 +252,13 @@ public class SpecificProxyServiceProperties {
             }
         } else {
             log.warn("eidas.proxy.oidc.auth-method not set. Using default  'client_secret_basic'");
+        }
+    }
+
+
+    private void assertParConfig() {
+        if (oidc.getPar()) {
+            Assert.notNull(oidc.getParEndpoint(), "eidas.proxy.oidc.par-endpoint cannot be null when eidas.proxy.oidc.par is 'true'");
         }
     }
 }

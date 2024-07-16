@@ -23,16 +23,25 @@ import com.nimbusds.jose.proc.BadJOSEException;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.oauth2.sdk.*;
 import com.nimbusds.oauth2.sdk.auth.ClientAuthentication;
+import com.nimbusds.oauth2.sdk.auth.ClientAuthenticationMethod;
 import com.nimbusds.oauth2.sdk.auth.ClientSecretBasic;
 import com.nimbusds.oauth2.sdk.auth.ClientSecretPost;
 import com.nimbusds.oauth2.sdk.auth.Secret;
 import com.nimbusds.oauth2.sdk.http.HTTPRequest;
+import com.nimbusds.oauth2.sdk.http.HTTPResponse;
 import com.nimbusds.oauth2.sdk.id.ClientID;
+import com.nimbusds.oauth2.sdk.id.State;
+import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
+import com.nimbusds.oauth2.sdk.PushedAuthorizationRequest;
+import com.nimbusds.oauth2.sdk.PushedAuthorizationResponse;
+import com.nimbusds.oauth2.sdk.PushedAuthorizationSuccessResponse;
+import com.nimbusds.oauth2.sdk.PushedAuthorizationErrorResponse;
+import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponseParser;
 import com.nimbusds.openid.connect.sdk.claims.ClaimsSet;
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata;
-
+import com.nimbusds.openid.connect.sdk.rp.OIDCClientMetadata;
 
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties;
 import ee.ria.eidas.proxy.specific.config.SpecificProxyServiceProperties.IdTokenClaimMappingProperties;
@@ -88,24 +97,85 @@ public class SpecificProxyService {
     public SpecificProxyServiceCommunication.CorrelatedRequestsHolder createOidcAuthenticationRequest(ILightRequest originalIlightRequest) {
         final String state = UUID.randomUUID().toString();
 
-        URI oidAuthenticationRequest =
-                UriComponentsBuilder.fromUri(oidcProviderMetadataService.getOidcProviderMetadata().getAuthorizationEndpointURI())
-                        .queryParam("scope", getScope(originalIlightRequest))
-                        .queryParam("response_type", "code")
-                        .queryParam("client_id", specificProxyServiceProperties.getOidc().getClientId())
-                        .queryParam("redirect_uri", specificProxyServiceProperties.getOidc().getRedirectUri())
-                        .queryParam("acr_values", getLevelOfAssurance(originalIlightRequest))
-                        .queryParam("ui_locales", specificProxyServiceProperties.getOidc().getDefaultUiLanguage())
-                        .queryParam("state", state)
-                        .encode(StandardCharsets.UTF_8).build().toUri();
+        ClientID clientID = new ClientID(specificProxyServiceProperties.getOidc().getClientId());
+        AuthorizationRequest.Builder authzReqBuilder = new AuthorizationRequest.Builder(
+                new ResponseType("code"),
+                clientID
+            )
+            .endpointURI(oidcProviderMetadataService.getOidcProviderMetadata().getAuthorizationEndpointURI())
+            .redirectionURI(URI.create(specificProxyServiceProperties.getOidc().getRedirectUri()))
+            .scope(new Scope(getScope(originalIlightRequest)))
+            .state(new State(state))
+            .customParameter("acr_values", getLevelOfAssurance(originalIlightRequest))
+            .customParameter("ui_locales", specificProxyServiceProperties.getOidc().getDefaultUiLanguage());
 
-        return createCorrelatedRequestsHolder(originalIlightRequest, oidAuthenticationRequest.toURL(), state);
+        CodeVerifier codeVerifier = null;
+        if (specificProxyServiceProperties.getOidc().getPkce()) {
+            codeVerifier = new CodeVerifier();
+            authzReqBuilder.codeChallenge(codeVerifier, CodeChallengeMethod.S256);
+        }
+
+        
+        URI oidAuthenticationRequest = null;
+        if (specificProxyServiceProperties.getOidc().getPar()) {
+            oidAuthenticationRequest = makeParRequest(authzReqBuilder.build(), clientID);
+        }
+
+        // if something went wrong during PAR request
+        // fallback to Authorization request
+        if (oidAuthenticationRequest == null) {
+            oidAuthenticationRequest = authzReqBuilder.build().toURI();
+        }
+
+        return createCorrelatedRequestsHolder(originalIlightRequest, codeVerifier, oidAuthenticationRequest.toURL(), state);
     }
 
-    @SneakyThrows
-    public ILightResponse queryIdpForRequestedAttributes(String oAuthCode, ILightRequest originalLightRequest) {
+    private URI makeParRequest(AuthorizationRequest req, ClientID clientID) {
+        String endpoint = specificProxyServiceProperties.getOidc().getParEndpoint();
+        ClientAuthentication clientAuth = getOIDCClientAuth(clientID);
+         // Create the PAR request and POST it
+        HTTPRequest httpRequest = new PushedAuthorizationRequest(URI.create(endpoint), clientAuth, req).toHTTPRequest();
+        // Process the PAR response
+        try {
+            HTTPResponse httpResponse = httpRequest.send();
 
-        JWT idToken = getIdToken(oAuthCode, new ClientID(specificProxyServiceProperties.getOidc().getClientId()));
+            PushedAuthorizationResponse response = PushedAuthorizationResponse.parse(httpResponse);
+            
+
+            if (!response.indicatesSuccess()) {
+                PushedAuthorizationErrorResponse err = response.toErrorResponse();
+                log.error("PAR request failed: code {}  ", err.getErrorObject().toString());
+                return null;
+            }
+
+            PushedAuthorizationSuccessResponse successResponse = response.toSuccessResponse();
+            System.out.println("Request URI: " + successResponse.getRequestURI());
+            System.out.println("Request URI expires in: " + successResponse.getLifetime() + " seconds");
+
+            URI requestUri = successResponse.getRequestURI();
+            // Construct the authZ request for the browser, with request_uri as
+            // the sole parameter
+            URI redirectURI = new AuthorizationRequest.Builder(requestUri)
+                .endpointURI(oidcProviderMetadataService.getOidcProviderMetadata().getAuthorizationEndpointURI())
+                .clientID(clientID)
+                .build()
+                .toURI();
+            return redirectURI;
+        } catch (ParseException e) {
+
+          log.error("PAR response parsing error ", e);
+          return null;  
+        } catch(IOException e) {
+            
+          log.error("Failed to send PAR request", e);
+          return null;  
+        }
+    }
+    
+    @SneakyThrows
+    public ILightResponse queryIdpForRequestedAttributes(String oAuthCode,CodeVerifier codeVerifier, ILightRequest originalLightRequest) {
+
+        JWT idToken = getIdToken(oAuthCode, new ClientID(specificProxyServiceProperties.getOidc().getClientId()), codeVerifier);
         log.info(append("idp.token_request.response.id_token", idToken.getParsedString()),
                 "Id-token received for code {} in response to LightRequest with id: '{}'",
                 value(IDP_TOKEN_REQUEST_CODE, oAuthCode),
@@ -142,9 +212,8 @@ public class SpecificProxyService {
             throw new IllegalStateException(String.format("The amr claim returned in the OIDC ID-token response is not allowed by the configuration. amr = '%s', allowed amr values by the configuration = '%s'", amr, allowedAmr));
         }
     }
-
-    private JWT getIdToken(String oAuthCode, ClientID clientID) throws URISyntaxException {
-
+    
+    private ClientAuthentication getOIDCClientAuth(ClientID clientID) {
         ClientAuthentication clientAuth ;
         switch (specificProxyServiceProperties.getOidc().getAuthMethod()) {
             case "client_secret_basic": 
@@ -166,18 +235,28 @@ public class SpecificProxyService {
                 );
         }
 
-        
 
+        return clientAuth;    
+    }
+
+    private JWT getIdToken(String oAuthCode, ClientID clientID, CodeVerifier codeVerifier) throws URISyntaxException {
+       
+        ClientAuthentication clientAuth = getOIDCClientAuth(clientID);
         OIDCProviderMetadata oidcProviderMetadata = oidcProviderMetadataService.getOidcProviderMetadata();
-        TokenRequest request = new TokenRequest(oidcProviderMetadata.getTokenEndpointURI(), clientAuth, getAuthorizationGrant(oAuthCode), null, null, null);
+        TokenRequest request = new TokenRequest(oidcProviderMetadata.getTokenEndpointURI(), clientAuth, getAuthorizationGrant(oAuthCode, codeVerifier), null, null, null);
         OIDCTokenResponse successResponse = getOidcTokenResponse(request);
 
         return successResponse.getOIDCTokens().getIDToken();
     }
 
-    private AuthorizationGrant getAuthorizationGrant(String oAuthCode) throws URISyntaxException {
+    private AuthorizationGrant getAuthorizationGrant(String oAuthCode, CodeVerifier codeVerifier) throws URISyntaxException {
         AuthorizationCode authorizationCode = new AuthorizationCode(oAuthCode);
         URI callback = new URI(specificProxyServiceProperties.getOidc().getRedirectUri());
+
+        if (specificProxyServiceProperties.getOidc().getPkce() && codeVerifier != null) {
+            
+            return new AuthorizationCodeGrant(authorizationCode, callback, codeVerifier);
+        }
         return new AuthorizationCodeGrant(authorizationCode, callback);
     }
 
@@ -333,9 +412,10 @@ public class SpecificProxyService {
         return InetAddress.getByName(new URL(issuerUrl).getHost()).getHostAddress();
     }
 
-    private SpecificProxyServiceCommunication.CorrelatedRequestsHolder createCorrelatedRequestsHolder(ILightRequest incomingLightRequest, URL redirectUrl, String state) {
+    private SpecificProxyServiceCommunication.CorrelatedRequestsHolder createCorrelatedRequestsHolder(ILightRequest incomingLightRequest,CodeVerifier codeVerifier, URL redirectUrl, String state) {
         return new SpecificProxyServiceCommunication.CorrelatedRequestsHolder(
                 incomingLightRequest,
+                codeVerifier,
                 Collections.singletonMap(state, redirectUrl)
         );
     }

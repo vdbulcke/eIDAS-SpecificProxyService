@@ -623,7 +623,7 @@ abstract class IdpResponseControllerTests extends ControllerTest {
 
 	Map.Entry<String, CorrelatedRequestsHolder> addMockRequestToPendingIdpRequestCommunicationCache(ILightRequest lightRequest) throws MalformedURLException {
 		String stateParameterValue = UUID.randomUUID().toString();
-		CorrelatedRequestsHolder requestsHolder = new CorrelatedRequestsHolder(lightRequest, Collections.singletonMap(stateParameterValue, new URL("http://oidAuthenticationRequest")));
+		CorrelatedRequestsHolder requestsHolder = new CorrelatedRequestsHolder(lightRequest, null, Collections.singletonMap(stateParameterValue, new URL("http://oidAuthenticationRequest")));
 		Map.Entry<String, CorrelatedRequestsHolder> mapEntry = new AbstractMap.SimpleEntry<String, CorrelatedRequestsHolder>(stateParameterValue, requestsHolder);
 		getIdpRequestCommunicationCache().put(stateParameterValue, requestsHolder);
 		return mapEntry;

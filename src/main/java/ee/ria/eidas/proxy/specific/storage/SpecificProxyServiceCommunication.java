@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 
+import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
+
 import javax.cache.Cache;
 import java.io.Serializable;
 import java.net.URL;
@@ -116,17 +118,15 @@ public class SpecificProxyServiceCommunication {
         }
     }
 
-    public ILightRequest getAndRemoveIdpRequest(String inResponseToId) {
+    public CorrelatedRequestsHolder getAndRemoveIdpRequest(String inResponseToId) {
         CorrelatedRequestsHolder correlatedRequestsHolder = idpRequestCommunicationCache.getAndRemove(inResponseToId);
 
         if (correlatedRequestsHolder != null) {
-            ILightRequest originalLightRequest = correlatedRequestsHolder.getLightRequest();
-
             if (log.isInfoEnabled())
                 log.info(append(IGNITE_CACHE_NAME, idpRequestCommunicationCache.getName()),
                         "Pending IDP request retrieved from cache for id: '{}'",
                         value(IDP_REQUEST_LIGHT_TOKEN_ID, inResponseToId));
-            return originalLightRequest;
+            return correlatedRequestsHolder;
         } else {
 
             if (log.isWarnEnabled())
@@ -149,13 +149,17 @@ public class SpecificProxyServiceCommunication {
         private final ILightRequest lightRequest;
 
         @Getter
+        private final CodeVerifier codeVerifier;
+
+        @Getter
         private final Map<String, URL> authenticationRequest;
 
-        public CorrelatedRequestsHolder(ILightRequest lightRequest, Map<String, URL> authenticationRequest) {
+        public CorrelatedRequestsHolder(ILightRequest lightRequest, CodeVerifier codeVerifier, Map<String, URL> authenticationRequest) {
             Assert.notNull(lightRequest, "Original LightRequest missing!");
             Assert.notNull(authenticationRequest, "IDP authentication request missing!");
             this.lightRequest = lightRequest;
             this.authenticationRequest = authenticationRequest;
+            this.codeVerifier = codeVerifier;
         }
 
         public String getIdpAuthenticationRequestState() {
